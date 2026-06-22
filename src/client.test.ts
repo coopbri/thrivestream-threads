@@ -45,17 +45,50 @@ describe("threads client", () => {
     expect(err.message).toContain("cannot be found");
   });
 
-  it("isPermanentThreadsError is true for a deleted anchor post, false otherwise", () => {
-    const deleted = new ThreadsApiError("createReply draft", 400, MEDIA_NOT_FOUND, {
+  it("isPermanentThreadsError is true for a deleted anchor at the draft step only", () => {
+    // Draft-step media-not-found = the reply anchor (go-live post) is gone.
+    const deletedAnchor = new ThreadsApiError("createReply draft", 400, MEDIA_NOT_FOUND, {
       code: 24,
       error_subcode: 4279009,
       is_transient: false,
     });
-    expect(isPermanentThreadsError(deleted)).toBe(true);
+    expect(isPermanentThreadsError(deletedAnchor)).toBe(true);
+    // Publish-step media-not-found = the container still processing: transient,
+    // must NOT be permanent or we'd wrongly drop the stream's post id.
+    const containerNotReady = new ThreadsApiError("createReply publish", 400, "", {
+      code: 24,
+      error_subcode: 4279009,
+      is_transient: false,
+    });
+    expect(isPermanentThreadsError(containerNotReady)).toBe(false);
     // A generic transient 500 should still be retried.
     const transient = new ThreadsApiError("createReply draft", 500, "", { is_transient: true });
     expect(isPermanentThreadsError(transient)).toBe(false);
     // Non-Threads errors are never treated as permanent.
     expect(isPermanentThreadsError(new Error("network down"))).toBe(false);
+  });
+
+  it("createReply waits for the container to finish before publishing", async () => {
+    let statusCalls = 0;
+    const fetcher = mock(async (url: string, init: RequestInit) => {
+      if (url.endsWith("/me/threads") && init.method === "POST") {
+        return new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+      }
+      if (url.includes("/container-1?fields=status")) {
+        statusCalls++;
+        // IN_PROGRESS on the first poll, FINISHED on the second.
+        return new Response(JSON.stringify({ status: statusCalls === 1 ? "IN_PROGRESS" : "FINISHED" }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/me/threads_publish") && init.method === "POST") {
+        return new Response(JSON.stringify({ id: "published-1" }), { status: 200 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    const client = createThreadsClient({ accessToken: "t", fetch: fetcher, pollIntervalMs: 0 });
+    const result = await client.createReply("anchor-1", "x: hi");
+    expect(result.id).toBe("published-1");
+    expect(statusCalls).toBeGreaterThanOrEqual(2);
   });
 });
