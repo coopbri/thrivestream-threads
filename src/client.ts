@@ -1,12 +1,5 @@
 import { z } from "zod";
 
-const meSchema = z.object({
-  id: z.string(),
-  username: z.string(),
-  threads_profile_picture_url: z.string().optional(),
-});
-export type ThreadsMe = z.infer<typeof meSchema>;
-
 export interface ThreadsClientOptions {
   accessToken: string;
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
@@ -128,14 +121,6 @@ export function createThreadsClient(opts: ThreadsClientOptions) {
   }
 
   return {
-    async me(): Promise<ThreadsMe> {
-      const res = await f(`${base}/me?fields=id,username,threads_profile_picture_url`, {
-        headers: auth,
-      });
-      if (!res.ok) throw await threadsFailure("/me", res);
-      return meSchema.parse(await res.json());
-    },
-
     async createPost(text: string): Promise<{ id: string }> {
       const creationId = await createContainer("createPost", { text, media_type: "TEXT" });
       return publishContainer("createPost", creationId);
